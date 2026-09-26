@@ -48,7 +48,7 @@ ADMIN_CHAT_IDS: list[int] = [
 WEBSITE_URL = "https://mark1.uz"
 
 # Android APK fayli bot bilan bir papkada (repo ildizida) turishi kerak
-APK_FILE_PATH = os.environ.get("APK_FILE_PATH", "bot_1/MarkCRM_Optimized_Modern_Phones.apk")
+APK_FILE_PATH = os.environ.get("APK_FILE_PATH", "MarkCRM_Optimized_Modern_Phones.apk")
 
 # Bir xil foydalanuvchidan takroriy lead yuborilmasligi uchun
 # necha soniya (cooldown) kutish kerakligi
@@ -119,7 +119,6 @@ def contact_request_keyboard() -> ReplyKeyboardMarkup:
 # ============================================================
 def main_inline_menu() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text="🌐 Ilovamiz", web_app=WebAppInfo(url=WEBSITE_URL))
     builder.button(text="📱 Android ilovasi (APK)", callback_data="menu:apk")
     builder.button(text="🚀 MARK1 nima?", callback_data="menu:about")
     builder.button(text="💰 Narxlar", callback_data="menu:narxlar")
@@ -472,6 +471,12 @@ async def cb_demo(callback: CallbackQuery, state: FSMContext):
 async def cb_apk(callback: CallbackQuery):
     await callback.answer()
     if not os.path.exists(APK_FILE_PATH):
+        logging.warning(
+            "APK fayli topilmadi: %s (joriy papka: %s, ichidagi fayllar: %s)",
+            APK_FILE_PATH,
+            os.getcwd(),
+            os.listdir("."),
+        )
         await callback.message.answer(
             "⚠️ Kechirasiz, hozircha ilova fayli mavjud emas. "
             "Iltimos, keyinroq urinib ko'ring yoki operatorga yozing.",

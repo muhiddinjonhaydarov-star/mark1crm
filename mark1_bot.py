@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import time
 from datetime import datetime
 
@@ -21,16 +22,27 @@ from aiogram.types import (
     WebAppInfo,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiohttp import web
 
 # ============================================================
 # SOZLAMALAR
 # ============================================================
-TOKEN = "8862726939:AAHdbXlrlmLtv7uutetqssZvu0dfE-zDWIw"
+# Token va Admin ID endi kodda emas — Render'da "Environment" bo'limida
+# BOT_TOKEN va ADMIN_CHAT_ID nomli maxfiy o'zgaruvchi sifatida saqlanadi.
+TOKEN = os.environ.get("BOT_TOKEN")
+if not TOKEN:
+    raise RuntimeError(
+        "BOT_TOKEN muhit o'zgaruvchisi topilmadi. "
+        "Render'da Environment bo'limiga BOT_TOKEN qo'shing "
+        "(lokal ishga tushirish uchun .env fayl yarating)."
+    )
 
-# Lead va operator xabarlari yuboriladigan admin chat/guruh ID'si.
-# Guruhga botni admin qilib qo'shib, guruh ID'sini shu yerga yozing
-# (masalan -1001234567890). Hozircha vaqtinchalik 0 turibdi.
-ADMIN_CHAT_ID = 7090724198
+# Lead va operator xabarlari yuboriladigan admin chat/guruh ID'lari.
+# Bir nechta admin bo'lsa, Render'da ADMIN_CHAT_ID qiymatini vergul bilan
+# ajratib yozing, masalan: 7090724198,7257376381
+ADMIN_CHAT_IDS: list[int] = [
+    int(x.strip()) for x in os.environ.get("ADMIN_CHAT_ID", "").split(",") if x.strip()
+]
 
 WEBSITE_URL = "https://mark1.uz"
 
@@ -43,10 +55,10 @@ router = Router()
 # user_id -> oxirgi lead yuborilgan vaqt (deduplication uchun)
 _last_lead_time: dict[int, float] = {}
 
-# admin chatdagi xabar_id -> foydalanuvchi user_id (operator javobini
+# (admin_chat_id, xabar_id) -> foydalanuvchi user_id (operator javobini
 # to'g'ri odamga yuborish uchun). Bot qayta ishga tushsa tozalanadi —
 # katta yuklama bo'lsa buni bazaga yozish tavsiya etiladi.
-_pending_replies: dict[int, int] = {}
+_pending_replies: dict[tuple[int, int], int] = {}
 
 
 def is_duplicate_lead(user_id: int) -> bool:
@@ -607,15 +619,16 @@ async def send_lead_notification(message: Message, lead_type: str, fields: dict[
 
     text += "\n\n✍️ <i>Javob berish uchun shu xabarga Reply qiling — javobingiz mijozga bot nomidan yuboriladi.</i>"
 
-    if ADMIN_CHAT_ID:
-        try:
-            sent = await message.bot.send_message(
-                ADMIN_CHAT_ID, text, reply_markup=builder.as_markup() if user.username else None
-            )
-            # shu xabarga reply qilinganda kimga javob yuborishni bilish uchun saqlab qo'yamiz
-            _pending_replies[sent.message_id] = user.id
-        except Exception as e:
-            logging.error("Lead xabarini yuborishda xato: %s", e)
+    if ADMIN_CHAT_IDS:
+        for admin_id in ADMIN_CHAT_IDS:
+            try:
+                sent = await message.bot.send_message(
+                    admin_id, text, reply_markup=builder.as_markup() if user.username else None
+                )
+                # shu xabarga reply qilinganda kimga javob yuborishni bilish uchun saqlab qo'yamiz
+                _pending_replies[(admin_id, sent.message_id)] = user.id
+            except Exception as e:
+                logging.error("Lead xabarini %s ga yuborishda xato: %s", admin_id, e)
     else:
         logging.warning("ADMIN_CHAT_ID sozlanmagan — lead hech kimga yuborilmadi:\n%s", text)
 
@@ -624,10 +637,10 @@ async def send_lead_notification(message: Message, lead_type: str, fields: dict[
 # ADMIN JAVOBI — Reply qilingan lead xabariga javob yozilsa,
 # bu javob mijozga BOT NOMIDAN yuboriladi (admin profili ko'rinmaydi)
 # ============================================================
-@router.message(F.chat.id == ADMIN_CHAT_ID, F.reply_to_message)
+@router.message(F.chat.id.in_(ADMIN_CHAT_IDS), F.reply_to_message)
 async def admin_reply_relay(message: Message):
     original_id = message.reply_to_message.message_id
-    target_user_id = _pending_replies.get(original_id)
+    target_user_id = _pending_replies.get((message.chat.id, original_id))
 
     if target_user_id is None:
         # Bu reply bizning lead xabarimizga emas — e'tiborsiz qoldiramiz
@@ -673,6 +686,24 @@ async def fallback_handler(message: Message):
 
 
 # ============================================================
+# KEEP-ALIVE VEB-SERVER (Render bepul reja shuni talab qiladi)
+# ============================================================
+async def health(request: web.Request) -> web.Response:
+    return web.Response(text="MARK1 bot ishlayapti ✅")
+
+
+async def start_web_server() -> None:
+    app = web.Application()
+    app.router.add_get("/", health)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logging.info("Keep-alive server %s portda ishga tushdi", port)
+
+
+# ============================================================
 # ISHGA TUSHIRISH
 # ============================================================
 async def main():
@@ -681,6 +712,9 @@ async def main():
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
     await bot.delete_webhook(drop_pending_updates=True)
+
+    await start_web_server()
+
     print("Bot ishga tushdi ...")
     await dp.start_polling(bot)
 

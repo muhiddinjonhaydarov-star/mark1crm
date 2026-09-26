@@ -13,6 +13,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     CallbackQuery,
+    FSInputFile,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     KeyboardButton,
@@ -45,6 +46,9 @@ ADMIN_CHAT_IDS: list[int] = [
 ]
 
 WEBSITE_URL = "https://mark1.uz"
+
+# Android APK fayli bot bilan bir papkada (repo ildizida) turishi kerak
+APK_FILE_PATH = os.environ.get("APK_FILE_PATH", "bot_1/MarkCRM_Optimized_Modern_Phones.apk")
 
 # Bir xil foydalanuvchidan takroriy lead yuborilmasligi uchun
 # necha soniya (cooldown) kutish kerakligi
@@ -115,6 +119,8 @@ def contact_request_keyboard() -> ReplyKeyboardMarkup:
 # ============================================================
 def main_inline_menu() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
+    builder.button(text="🌐 Ilovamiz", web_app=WebAppInfo(url=WEBSITE_URL))
+    builder.button(text="📱 Android ilovasi (APK)", callback_data="menu:apk")
     builder.button(text="🚀 MARK1 nima?", callback_data="menu:about")
     builder.button(text="💰 Narxlar", callback_data="menu:narxlar")
     builder.button(text="🎁 Bepul sinab ko'rish", callback_data="menu:demo")
@@ -460,6 +466,26 @@ async def cb_faq_item(callback: CallbackQuery):
 async def cb_demo(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await start_demo_form(callback.message, state, edit=True)
+
+
+@router.callback_query(F.data == "menu:apk")
+async def cb_apk(callback: CallbackQuery):
+    await callback.answer()
+    if not os.path.exists(APK_FILE_PATH):
+        await callback.message.answer(
+            "⚠️ Kechirasiz, hozircha ilova fayli mavjud emas. "
+            "Iltimos, keyinroq urinib ko'ring yoki operatorga yozing.",
+            reply_markup=simple_back_keyboard(
+                [InlineKeyboardButton(text="👨‍💼 Operatorga yozish", callback_data="menu:operator")]
+            ),
+        )
+        return
+    await callback.message.answer_document(
+        FSInputFile(APK_FILE_PATH),
+        caption="📱 MARK1 Android ilovasi.\n\nO'rnatishdan oldin telefon sozlamalarida "
+        "\"Noma'lum manbalardan o'rnatish\"ga ruxsat bering.",
+        reply_markup=simple_back_keyboard(),
+    )
 
 
 @router.callback_query(F.data == "menu:operator")

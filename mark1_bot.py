@@ -13,7 +13,6 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     CallbackQuery,
-    FSInputFile,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     KeyboardButton,
@@ -28,7 +27,7 @@ from aiohttp import web
 # ============================================================
 # SOZLAMALAR
 # ============================================================
-# Token va Admin ID endi kodda emas — Render'da "Environment" bo'limida
+# Token va Admin ID kodda emas — Render'da "Environment" bo'limida
 # BOT_TOKEN va ADMIN_CHAT_ID nomli maxfiy o'zgaruvchi sifatida saqlanadi.
 TOKEN = os.environ.get("BOT_TOKEN")
 if not TOKEN:
@@ -39,19 +38,34 @@ if not TOKEN:
     )
 
 # Lead va operator xabarlari yuboriladigan admin chat/guruh ID'lari.
-# Bir nechta admin bo'lsa, Render'da ADMIN_CHAT_ID qiymatini vergul bilan
-# ajratib yozing, masalan: 7090724198,7257376381
+# Bir nechta admin bo'lsa, vergul bilan ajrating: 7090724198,7257376381
 ADMIN_CHAT_IDS: list[int] = [
     int(x.strip()) for x in os.environ.get("ADMIN_CHAT_ID", "").split(",") if x.strip()
 ]
 
 WEBSITE_URL = "https://mark1.uz"
+WEBSITE_BUTTON_TEXT = "🌐 MARK1 - Aqlli CRM platformasi"
 
-# Android APK fayli bot bilan bir papkada (repo ildizida) turishi kerak
-APK_FILE_PATH = os.environ.get("APK_FILE_PATH", "MarkCRM_Optimized_Modern_Phones.apk")
+# ------------------------------------------------------------
+# ADMINLAR PANELI — 2 ta admin: ism, vazifa, telefon, username.
+# Quyidagi ma'lumotlarni o'zingiznikiga almashtiring.
+# ------------------------------------------------------------
+ADMINS: list[dict[str, str]] = [
+    {
+        "name": "N.Rasuljon",
+        "role": "Sotuv bo'yicha menejer: narxlar, demo va ulanish masalalari,foydalanish bo'yicha savollar",
+        "phone": "+998 77 811 79 90",
+        "username": "@NRASULJON",
+    },
+    {
+        "name": "M.Doniyorbek",
+        "role": "Texnik yordam: o'rnatish, sozlash va Xavsizlik uchun javobgar",
+        "phone": "+998 94 758 24 07",
+        "username": "@mvvvvvd7",
+    },
+]
 
-# Bir xil foydalanuvchidan takroriy lead yuborilmasligi uchun
-# necha soniya (cooldown) kutish kerakligi
+# Bir xil foydalanuvchidan takroriy lead yuborilmasligi uchun kutish vaqti
 LEAD_COOLDOWN_SECONDS = 10 * 60  # 10 daqiqa
 
 router = Router()
@@ -60,8 +74,7 @@ router = Router()
 _last_lead_time: dict[int, float] = {}
 
 # (admin_chat_id, xabar_id) -> foydalanuvchi user_id (operator javobini
-# to'g'ri odamga yuborish uchun). Bot qayta ishga tushsa tozalanadi —
-# katta yuklama bo'lsa buni bazaga yozish tavsiya etiladi.
+# to'g'ri odamga yuborish uchun). Bot qayta ishga tushsa tozalanadi.
 _pending_replies: dict[tuple[int, int], int] = {}
 
 
@@ -98,6 +111,7 @@ def main_reply_keyboard() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="🏠 Bosh sahifa"), KeyboardButton(text="🚀 Imkoniyatlar")],
             [KeyboardButton(text="💰 Narxlar"), KeyboardButton(text="🎁 Sinab ko'rish")],
             [KeyboardButton(text="❓ Savol-javob"), KeyboardButton(text="👨‍💼 Operator")],
+            [KeyboardButton(text="📞 Adminlar")],
         ],
         resize_keyboard=True,
     )
@@ -119,7 +133,9 @@ def contact_request_keyboard() -> ReplyKeyboardMarkup:
 # ============================================================
 def main_inline_menu() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text="📱 Android ilovasi (APK)", callback_data="menu:apk")
+    # APK tugmasi olib tashlandi, o'rniga Adminlar paneli qo'yildi
+    builder.button(text="👨‍💻 Adminlar paneli", callback_data="menu:admins")
+    builder.button(text=WEBSITE_BUTTON_TEXT, web_app=WebAppInfo(url=WEBSITE_URL))
     builder.button(text="🚀 MARK1 nima?", callback_data="menu:about")
     builder.button(text="💰 Narxlar", callback_data="menu:narxlar")
     builder.button(text="🎁 Bepul sinab ko'rish", callback_data="menu:demo")
@@ -163,7 +179,37 @@ def simple_back_keyboard(extra_buttons: list[InlineKeyboardButton] | None = None
 
 
 # ============================================================
-# FAQ MA'LUMOTLARI (texnik topshiriqdan)
+# ADMINLAR PANELI
+# ============================================================
+def build_admins_text() -> str:
+    lines = ["📞 <b>Adminlar bilan bog'lanish</b>\n"]
+    for a in ADMINS:
+        lines.append(
+            f"👤 <b>{a['name']}</b>\n"
+            f"💼 {a['role']}\n"
+            f"📱 <code>{a['phone']}</code>\n"
+            f"✈️ @{a['username']}\n"
+        )
+    lines.append("Savol bo'lsa, quyidagi tugmalar orqali yozing 👇")
+    return "\n".join(lines)
+
+
+def admin_contacts_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for a in ADMINS:
+        builder.row(
+            InlineKeyboardButton(
+                text=f"💬 {a['name']} ga yozish",
+                url=f"https://t.me/{a['username']}",
+            )
+        )
+    builder.row(InlineKeyboardButton(text="✍️ Botda savol qoldirish", callback_data="menu:operator"))
+    builder.row(back_to_main_button())
+    return builder.as_markup()
+
+
+# ============================================================
+# FAQ MA'LUMOTLARI
 # ============================================================
 FAQ_ITEMS: dict[str, dict] = {
     "mark1_nima": {
@@ -411,6 +457,11 @@ async def reply_operator(message: Message, state: FSMContext):
     await start_operator_question(message, state)
 
 
+@router.message(F.text == "📞 Adminlar")
+async def reply_admins(message: Message):
+    await message.answer(build_admins_text(), reply_markup=admin_contacts_keyboard())
+
+
 # ---- Inline menyu callback'lari ----
 @router.callback_query(F.data == "menu:main")
 async def cb_main(callback: CallbackQuery, state: FSMContext):
@@ -467,30 +518,10 @@ async def cb_demo(callback: CallbackQuery, state: FSMContext):
     await start_demo_form(callback.message, state, edit=True)
 
 
-@router.callback_query(F.data == "menu:apk")
-async def cb_apk(callback: CallbackQuery):
+@router.callback_query(F.data == "menu:admins")
+async def cb_admins(callback: CallbackQuery):
+    await callback.message.edit_text(build_admins_text(), reply_markup=admin_contacts_keyboard())
     await callback.answer()
-    if not os.path.exists(APK_FILE_PATH):
-        logging.warning(
-            "APK fayli topilmadi: %s (joriy papka: %s, ichidagi fayllar: %s)",
-            APK_FILE_PATH,
-            os.getcwd(),
-            os.listdir("."),
-        )
-        await callback.message.answer(
-            "⚠️ Kechirasiz, hozircha ilova fayli mavjud emas. "
-            "Iltimos, keyinroq urinib ko'ring yoki operatorga yozing.",
-            reply_markup=simple_back_keyboard(
-                [InlineKeyboardButton(text="👨‍💼 Operatorga yozish", callback_data="menu:operator")]
-            ),
-        )
-        return
-    await callback.message.answer_document(
-        FSInputFile(APK_FILE_PATH),
-        caption="📱 MARK1 Android ilovasi.\n\nO'rnatishdan oldin telefon sozlamalarida "
-        "\"Noma'lum manbalardan o'rnatish\"ga ruxsat bering.",
-        reply_markup=simple_back_keyboard(),
-    )
 
 
 @router.callback_query(F.data == "menu:operator")
@@ -656,7 +687,6 @@ async def send_lead_notification(message: Message, lead_type: str, fields: dict[
                 sent = await message.bot.send_message(
                     admin_id, text, reply_markup=builder.as_markup() if user.username else None
                 )
-                # shu xabarga reply qilinganda kimga javob yuborishni bilish uchun saqlab qo'yamiz
                 _pending_replies[(admin_id, sent.message_id)] = user.id
             except Exception as e:
                 logging.error("Lead xabarini %s ga yuborishda xato: %s", admin_id, e)
@@ -666,7 +696,7 @@ async def send_lead_notification(message: Message, lead_type: str, fields: dict[
 
 # ============================================================
 # ADMIN JAVOBI — Reply qilingan lead xabariga javob yozilsa,
-# bu javob mijozga BOT NOMIDAN yuboriladi (admin profili ko'rinmaydi)
+# bu javob mijozga BOT NOMIDAN yuboriladi
 # ============================================================
 @router.message(F.chat.id.in_(ADMIN_CHAT_IDS), F.reply_to_message)
 async def admin_reply_relay(message: Message):
@@ -674,7 +704,6 @@ async def admin_reply_relay(message: Message):
     target_user_id = _pending_replies.get((message.chat.id, original_id))
 
     if target_user_id is None:
-        # Bu reply bizning lead xabarimizga emas — e'tiborsiz qoldiramiz
         return
 
     try:
